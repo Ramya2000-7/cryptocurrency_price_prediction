@@ -1,95 +1,89 @@
-# Cryptocurrency Price Prediction with LSTM
-# Import libraries
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import yfinance as yf
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, LSTM
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+import matplotlib.pyplot as plt
 
-# Step 1: Load Data
-# Download Bitcoin (BTC-USD) historical data
-data = yf.download('BTC-USD', start='2018-01-01', end='2024-01-01')
 
-# Display the first few rows
-print(data.head())
+# Step 1: Fetch historical Bitcoin price data
+def fetch_data():
+    # Download Bitcoin data from Yahoo Finance, explicitly setting auto_adjust
+    data = yf.download('BTC-USD', start='2020-01-01', end='2025-05-01', interval='1d', auto_adjust=False)
+    return data['Close'].values.reshape(-1, 1)
 
-# Step 2: Preprocess Data
-# Use 'Close' prices only
-close_prices = data['Close'].values.reshape(-1, 1)
 
-# Normalize data between 0 and 1
-scaler = MinMaxScaler(feature_range=(0, 1))
-scaled_data = scaler.fit_transform(close_prices)
+# Step 2: Prepare data for LSTM
+def prepare_data(data, time_steps=60):
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_data = scaler.fit_transform(data)
 
-# Create training datasets
-training_size = int(len(scaled_data) * 0.8)
-train_data = scaled_data[0:training_size, :]
-test_data = scaled_data[training_size:, :]
-
-# Function to create sequences
-def create_dataset(dataset, time_step=60):
     X, y = [], []
-    for i in range(len(dataset) - time_step - 1):
-        X.append(dataset[i:(i + time_step), 0])
-        y.append(dataset[i + time_step, 0])
-    return np.array(X), np.array(y)
+    for i in range(time_steps, len(scaled_data)):
+        X.append(scaled_data[i - time_steps:i, 0])
+        y.append(scaled_data[i, 0])
 
-time_step = 60
-X_train, y_train = create_dataset(train_data, time_step)
-X_test, y_test = create_dataset(test_data, time_step)
+    X, y = np.array(X), np.array(y)
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
 
-# Reshape input for LSTM: [samples, time steps, features]
-X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
-X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+    # Split into train and test sets
+    train_size = int(len(X) * 0.8)
+    X_train, X_test = X[:train_size], X[train_size:]
+    y_train, y_test = y[:train_size], y[train_size:]
 
-# Step 3: Build LSTM Model
-model = Sequential()
-model.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
-model.add(LSTM(50, return_sequences=False))
-model.add(Dense(25))
-model.add(Dense(1))
+    return X_train, X_test, y_train, y_test, scaler
 
-# Compile model
-model.compile(optimizer='adam', loss='mean_squared_error')
 
-# Step 4: Train the Model
-model.fit(X_train, y_train, batch_size=32, epochs=50)
+# Step 3: Build and train LSTM model
+def build_model(time_steps):
+    model = Sequential()
+    # Use Input layer to define input shape
+    model.add(Input(shape=(time_steps, 1)))
+    model.add(LSTM(units=50, return_sequences=True))
+    model.add(Dropout(0.2))
+    model.add(LSTM(units=50, return_sequences=False))
+    model.add(Dropout(0.2))
+    model.add(Dense(units=25))
+    model.add(Dense(units=1))
 
-# Step 5: Model Evaluation
-# Predictions
-train_predict = model.predict(X_train)
-test_predict = model.predict(X_test)
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    return model
 
-# Reverse scaling
-train_predict = scaler.inverse_transform(train_predict)
-y_train = scaler.inverse_transform(y_train.reshape(-1, 1))
-test_predict = scaler.inverse_transform(test_predict)
-y_test = scaler.inverse_transform(y_test.reshape(-1, 1))
 
-# Step 6: Plotting Results
-# Shift predictions for plotting
-look_back = time_step
-trainPredictPlot = np.empty_like(scaled_data)
-trainPredictPlot[:, :] = np.nan
-trainPredictPlot[look_back:len(train_predict)+look_back, :] = train_predict
+# Step 4: Make predictions and visualize
+def predict_and_plot(model, X_test, y_test, scaler, data):
+    predictions = model.predict(X_test)
+    predictions = scaler.inverse_transform(predictions)
+    y_test = scaler.inverse_transform([y_test])
 
-testPredictPlot = np.empty_like(scaled_data)
-testPredictPlot[:, :] = np.nan
-testPredictPlot[len(train_predict)+(look_back*2)+1:len(scaled_data)-1, :] = test_predict
+    plt.figure(figsize=(10, 6))
+    plt.plot(y_test.T, label='Actual Price')
+    plt.plot(predictions, label='Predicted Price')
+    plt.title('Bitcoin Price Prediction')
+    plt.xlabel('Time')
+    plt.ylabel('Price (USD)')
+    plt.legend()
+    plt.savefig('prediction_plot.png')
+    plt.close()
 
-# Plot baseline and predictions
-plt.figure(figsize=(14,6))
-plt.title('Cryptocurrency Price Prediction (BTC-USD)')
-plt.xlabel('Days')
-plt.ylabel('Close Price USD ($)')
-plt.plot(scaler.inverse_transform(scaled_data), label='Actual Price')
-plt.plot(trainPredictPlot, label='Training Prediction')
-plt.plot(testPredictPlot, label='Testing Prediction')
-plt.legend()
-plt.show()
 
-# Step 7: Save Model
-model.save('model/crypto_price_model.h5')
-print("✅ Model saved as 'crypto_price_model.h5'")
+# Main execution
+if __name__ == "__main__":
+    # Note: If you see a urllib3 NotOpenSSLWarning, it is due to LibreSSL in your environment.
+    # Consider updating your SSL library to OpenSSL 1.1.1+ or pinning urllib3 to a compatible version.
+
+    # Fetch and prepare data
+    data = fetch_data()
+    time_steps = 60
+    X_train, X_test, y_train, y_test, scaler = prepare_data(data, time_steps)
+
+    # Build and train model
+    model = build_model(time_steps)
+    model.fit(X_train, y_train, epochs=25, batch_size=32, verbose=1)
+
+    # Predict and visualize
+    predict_and_plot(model, X_test, y_test, scaler, data)
+
+    # Save model in native Keras format
+    model.save('crypto_price_model.keras')
